@@ -1,8 +1,8 @@
 import tkinter as tk
-from typing import Set
-
-
-current_intersections: Set[tk.Button] = set()  # Used to store all placed intersections
+from _tkinter import TclError
+from typing import Set, List, Type
+from weakref import WeakSet
+from info import img_width, img_height
 
 
 def nocommand(*args, **kwargs):
@@ -36,53 +36,114 @@ class M2ContextMenu(tk.Menu):
 
 
 class MouseLine:
-    """ Singleton class which represents the line being drawn between a point and the mouse. """
-    _instance = None
+    """ Draws a line from the stored position to that of the mouse. """
+    uid: int = None  # Unique ID of the drawn line. Will change whenever end position is updated.
 
-    def __new__(self):
-        if self._instance is None:
-            print('Creating the object')
-            self._instance = super(MouseLine, self).__new__(self)
-            # Put any initialization here.
-        return self._instance
+    start_intersection = end_intersection = None  # Connected widgets.
+    posX: int = None; posY: int = None  # Origin position of the line.
+
+    root: tk.Tk = None  # Root GUI for the line (needed for bindings).
+    canvas: tk.Canvas = None  # Canvas to draw the line upon.
+
+    def __init__(self, root:tk.Tk, canvas:tk.Canvas, intersection:tk.Button) -> None:
+        """
+        :param root: Root GUI for the line (needed for bindings).
+        :param canvas: Canvas to draw the line upon.
+        :param intersection: Start intersection of the line.
+        """
+        self.root, self.canvas, self.start_intersection = root, canvas, intersection
+
+        info = intersection.place_info()
+        self.posX, self.posY = int(info['x']) + img_width, int(info['y']) + img_height
+
+        super().__init__()
+        current_mouselines.append(self)
+        mouselines.add(self)
+
+    def __getitem__(self, intersection:Type[tk.Button]):
+        if not self.locked: raise AttributeError(f"{self} must be locked before the opposite intersection may be retrieved.")
+        return self._opposite[intersection]
+
+    def update(self, event) -> None:
+        """ Update the end position of the line. """
+        if not isinstance(event.widget, tk.Button):
+            if self.uid: self.canvas.delete(self.uid)  # Delete the outdated line, if it exists.
+            self.uid = self.canvas.create_line(self.posX, self.posY, event.x, event.y, fill='black', width=10)
+
+    def destroy(self) -> None:
+        """ Unbinds, removes and destroys this line. """
+
+        # Multiple exceptions may occur when the program is closed. These are luckily of little concern to us,
+        # if the program is to be closed anyway.
+        try: self.canvas.delete(self.uid)  # Delete the outdated line, if it exists.
+        except TclError: pass
+
+        try: current_mouselines.remove(self)
+        except ValueError: pass
+
+        try: mouselines.remove(self)
+        except ValueError: pass
+
+        del self
+
+    def lock_n_link(self, intersection:tk.Button) -> None:
+        """ Links and locks the current line between two points. """
+        current_mouselines.remove(self)
+        self.end_intersection = intersection
+        intersection.connections.add(self)
+        self.start_intersection.connections.add(self)
+
+        self._opposite = {intersection: self.start_intersection, self.start_intersection: intersection}
+
+        class coords:
+            """ Driver class for MouseLine lock_n_link line update. """
+            widget = None
+            x, y = intersection.winfo_x() + img_width, intersection.winfo_y() + img_height
+
+        self.update(coords())
+
+    @property
+    def locked(self):
+        """
+        :return: True when both ends are linked to intersections, and the line is not tracking the mouse.
+        """
+        return self.start_intersection and self.end_intersection
+
+    def opposite(self, intersection):
+        """
+        :param intersection: intersection whose opposite should be returned.
+        :return: Returns the intersection at the opposite end of the connection.
+        """
+        return {self.end_intersection: self.start_intersection, self.start_intersection: self.end_intersection}.get(intersection, None)
+
+    def __str__(self) -> str:
+        return f"MouseLine UID{self.uid} [x{self.posX}, y{self.posY}]"
 
 
-class RoundedButton(tk.Canvas):
-    """ Sourced from: https://stackoverflow.com/questions/42579927/rounded-button-tkinter-python """
-    def __init__(self, parent, width, height, cornerradius, padding, color, bg, command=None):
-        tk.Canvas.__init__(self, parent, borderwidth=0,
-            relief="flat", highlightthickness=0, bg=bg)
-        self.command = command
+class Intersection(tk.Button):
+    connections: Set[MouseLine] = None  # Stores all MouseLines currently connected to this intersection.
 
-        if cornerradius > 0.5*width:
-            print("Error: cornerradius is greater than width.")
-            return None
+    def __init__(self, master=None, cnf={}, **kw):
+        self.connections = WeakSet()  # Connections must be declared as an instance attribute, to avoid it being static.
+        super().__init__(master, cnf, **kw)
 
-        if cornerradius > 0.5*height:
-            print("Error: cornerradius is greater than height.")
-            return None
+    def destroy(self):
+        """ Destroy this intersection, its descendant widgets and connected MouseLines. """
+        for line in self.connections:
+            line.destroy()
+        super().destroy()
 
-        rad = 2*cornerradius
-        def shape():
-            self.create_polygon((padding,height-cornerradius-padding,padding,cornerradius+padding,padding+cornerradius,padding,width-padding-cornerradius,padding,width-padding,cornerradius+padding,width-padding,height-cornerradius-padding,width-padding-cornerradius,height-padding,padding+cornerradius,height-padding), fill=color, outline=color)
-            self.create_arc((padding,padding+rad,padding+rad,padding), start=90, extent=90, fill=color, outline=color)
-            self.create_arc((width-padding-rad,padding,width-padding,padding+rad), start=0, extent=90, fill=color, outline=color)
-            self.create_arc((width-padding,height-rad-padding,width-padding-rad,height-padding), start=270, extent=90, fill=color, outline=color)
-            self.create_arc((padding,height-padding-rad,padding+rad,height-padding), start=180, extent=90, fill=color, outline=color)
+    def destroy_connections(self) -> None:
+        destroy_all(self.connections)
+
+    def connected_to(self, intersection):
+        """
+        :param intersection: The intersection to compare against.
+        :return: Returns a boolean based on whether a connection exists between the two intersections.
+        """
+        return bool(self.connections.intersection(intersection.connections))
 
 
-        id = shape()
-        (x0,y0,x1,y1)  = self.bbox("all")
-        width = (x1-x0)
-        height = (y1-y0)
-        self.configure(width=width, height=height)
-        self.bind("<ButtonPress-1>", self._on_press)
-        self.bind("<ButtonRelease-1>", self._on_release)
-
-    def _on_press(self, event):
-        self.configure(relief="sunken")
-
-    def _on_release(self, event):
-        self.configure(relief="raised")
-        if self.command is not None:
-            self.command()
+current_intersections: Set[Intersection] = set()  # Used to store all placed intersections
+current_mouselines: List[MouseLine] = []  # List of all mouselines currently being drawn.
+mouselines: Set[MouseLine] = set()  # Set of all placed connectors
