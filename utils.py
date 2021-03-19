@@ -1,38 +1,13 @@
 import tkinter as tk
+import traceback
 from _tkinter import TclError
-from typing import Set, List, Type
+from typing import Set, List, Type, Tuple, Union
 from weakref import WeakSet
 from info import img_width, img_height
 
 
 def nocommand(*args, **kwargs):
     raise NotImplementedError('Command has not been impleted yet')
-
-
-def destroy_all(inlist:Set[tk.BaseWidget]):
-    """ Iterate over provided set and destroy widgets """
-    for widget in inlist:
-        try:  # Ensure that we do not break if exceptions occur.
-            widget.destroy()
-        except Exception as e:
-            print(e)
-    inlist.clear()  # clear the set once we are finished with it.
-
-
-class M2ContextMenu(tk.Menu):
-    """ This class defines our custom right click menu. """
-
-    def __init__(self, master=None, cnf={}, **kw):
-        """ __init__ has been adapted to include our custom commands by default. """
-
-        super().__init__(master, cnf, **kw, tearoff=False)
-
-        # Context specific commands will be inserted at the first index.
-        self.add_separator()
-        self.add_command(label="Clear Map", command=lambda: destroy_all(current_intersections))
-        self.add_command(label="Save Map", command=nocommand)
-        self.add_separator()
-        self.add_command(label="Exit", command=master.quit)
 
 
 class MouseLine:
@@ -86,7 +61,7 @@ class MouseLine:
 
         del self
 
-    def lock_n_link(self, intersection:tk.Button) -> None:
+    def lock_n_link(self, intersection:tk.Button, override_cords:Tuple[int, int]=(None, None)) -> None:
         """ Links and locks the current line between two points. """
         current_mouselines.remove(self)
         self.end_intersection = intersection
@@ -98,7 +73,7 @@ class MouseLine:
         class coords:
             """ Driver class for MouseLine lock_n_link line update. """
             widget = None
-            x, y = intersection.winfo_x() + img_width, intersection.winfo_y() + img_height
+            x, y = override_cords[0] if override_cords[0] is not None else (intersection.winfo_x() + img_width), override_cords[1] if override_cords[1] is not None else (intersection.winfo_y() + img_height)
 
         self.update(coords())
 
@@ -120,28 +95,62 @@ class MouseLine:
         return f"MouseLine UID{self.uid} [x{self.posX}, y{self.posY}]"
 
 
+def destroy_all(inlist:Union[Set[tk.BaseWidget], List[MouseLine]]):
+    """ Iterate over provided set and destroy widgets """
+    for widget in inlist:
+        try:  # Ensure that we do not break if exceptions occur.
+            widget.destroy()
+        except Exception:
+            traceback.print_exc()
+    inlist.clear()  # clear the set once we are finished with it.
+
+
+class M2ContextMenu(tk.Menu):
+    """ This class defines our custom right click menu. """
+
+    def __init__(self, master=None, cnf={}, **kw):
+        """ __init__ has been adapted to include our custom commands by default. """
+
+        super().__init__(master, cnf, **kw, tearoff=False)
+
+        # Context specific commands will be inserted at the first index.
+        self.add_separator()
+        self.add_command(label="Clear Map", command=lambda: destroy_all(current_intersections))
+        self.add_command(label="Save Map", command=nocommand)
+        self.add_separator()
+        self.add_command(label="Exit", command=master.quit)
+
+
 class Intersection(tk.Button):
     connections: Set[MouseLine] = None  # Stores all MouseLines currently connected to this intersection.
 
-    def __init__(self, master=None, cnf={}, **kw):
-        self.connections = WeakSet()  # Connections must be declared as an instance attribute, to avoid it being static.
+    def __init__(self, master=None, cnf={}, **kw) -> None:
+        self.connections = WeakSet()  # Connection set must be declared as an instance attribute, to avoid it being static.
         super().__init__(master, cnf, **kw)
 
-    def destroy(self):
+    def destroy(self) -> None:
         """ Destroy this intersection, its descendant widgets and connected MouseLines. """
         for line in self.connections:
             line.destroy()
         super().destroy()
 
     def destroy_connections(self) -> None:
+        """ Destroys all connections this intersection has. """
         destroy_all(self.connections)
 
-    def connected_to(self, intersection):
+    def connected_to(self, intersection) -> bool:
         """
         :param intersection: The intersection to compare against.
         :return: Returns a boolean based on whether a connection exists between the two intersections.
         """
         return bool(self.connections.intersection(intersection.connections))
+
+    def disconnect(self, intersection) -> None:
+        """
+        Destory any connection that may exist between the two intersections.
+        :param intersection: Intersection to disconnect with.
+        """
+        destroy_all(self.connections.intersection(intersection.connections))
 
 
 current_intersections: Set[Intersection] = set()  # Used to store all placed intersections
